@@ -1,0 +1,139 @@
+# Data directories - do not commit large video files
+annotations/
+train_set/
+data/train_set/
+data/annotations/
+__train_set/
+
+# Experimental results
+experiments/
+logs/
+checkpoints/
+tensorboard/
+results/
+
+# Virtual environments
+venv/
+venv_cpu/
+env/
+.env
+.venv
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTorch model files (large)
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.out
+
+# Conda environment files
+environment.yml.bak
+*.tar.gz
+
+# WandB logging
+wandb/
+
+# MLflow tracking
+mlruns/
+
+# TensorBoard logs
+runs/
+tb_logs/
+
+# Video files (large datasets)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.flv
+
+# Image datasets
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.tif
+
+# Compressed files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# CUDA cache
+*.cubin
+*.ptx
+
+# Error logs
+error.log
+debug.log
+training.log
