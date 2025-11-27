@@ -16,7 +16,7 @@ import glob
 import json
 from pathlib import Path
 import random
-from config import DataConfig, ModelConfig
+from configs.config import DataConfig, ModelConfig
 
 
 class VideoProcessor:

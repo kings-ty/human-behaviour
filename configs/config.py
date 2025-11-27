@@ -4,7 +4,7 @@ Based on the paper: "HRI30: An Action Recognition Dataset for Industrial Human-R
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Any
 
 
@@ -26,11 +26,11 @@ class DataConfig:
     clip_duration: float = 2.0  # Most clips are 1-2 seconds
     
     # Data splits (from Table II in paper)
-    train_split_ratios: List[float] = [0.714, 0.786, 0.643]  # [2100/2940, 2310/2940, 1890/2940]
-    test_split_ratios: List[float] = [0.286, 0.214, 0.357]   # [840/2940, 630/2940, 1050/2940]
+    train_split_ratios: List[float] = field(default_factory=lambda: [0.714, 0.786, 0.643])  # [2100/2940, 2310/2940, 1890/2940]
+    test_split_ratios: List[float] = field(default_factory=lambda: [0.286, 0.214, 0.357])   # [840/2940, 630/2940, 1050/2940]
     
     # 30 Action classes from the paper
-    action_classes: List[str] = [
+    action_classes: List[str] = field(default_factory=lambda: [
         "Deliver_Object",
         "Move_Backwards_While_Drilling", 
         "Move_Backwards_While_Polishing",
@@ -61,7 +61,7 @@ class DataConfig:
         "Walking_with_Drill",
         "Walking_with_Object",
         "Walking_with_Polisher"
-    ]
+    ])
     
     # Action categories (from paper)
     action_categories: Dict[str, List[str]] = None
@@ -144,7 +144,7 @@ class TrainingConfig:
     min_delta: float = 0.001
     
     # Evaluation metrics (from paper)
-    metrics: List[str] = ["accuracy", "top5_accuracy", "f1_score", "confusion_matrix"]
+    metrics: List[str] = field(default_factory=lambda: ["accuracy", "top5_accuracy", "f1_score", "confusion_matrix"])
     
     # Mixed precision training (for memory efficiency)
     use_amp: bool = True

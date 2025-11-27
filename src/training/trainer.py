@@ -20,9 +20,9 @@ import time
 from datetime import datetime
 import wandb
 
-from config import ModelConfig, TrainingConfig, get_config_for_device
-from models import create_model, LossFunction, ModelUtils
-from data_loader import HRI30DataModule
+from configs.config import ModelConfig, TrainingConfig, get_config_for_device
+from src.models import SlowOnlyModel
+from src.data.data_loader import HRI30DataModule
 
 
 class MetricsTracker:
@@ -129,7 +129,7 @@ class HRI30Trainer:
         self.device = device
         
         # Create model
-        self.model = create_model(model_config).to(device)
+        self.model = SlowOnlyModel(config=model_config).to(device)
         
         # Create optimizer (SGD as specified in paper)
         self.optimizer = self._create_optimizer()
