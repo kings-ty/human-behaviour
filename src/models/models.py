@@ -23,12 +23,13 @@ class SlowOnlyModel(nn.Module):
         self.config = config
         self.num_classes = 30  # HRI30 has 30 classes
         
-        # Load pre-trained ResNet50 backbone
-        if config.pretrained == "kinetics400":
-            # Load pre-trained weights (would need actual kinetics400 weights)
+        # Load lightweight backbone based on config
+        if config.backbone == "resnet18":
+            self.backbone = models.resnet18(pretrained=True)
+        elif config.backbone == "resnet50":
             self.backbone = models.resnet50(pretrained=True)
         else:
-            self.backbone = models.resnet50(pretrained=True)
+            self.backbone = models.resnet18(pretrained=True)  # Default to lightest
         
         # Modify first conv layer for video input (3D convolution)
         self.backbone.conv1 = nn.Conv3d(
@@ -45,13 +46,14 @@ class SlowOnlyModel(nn.Module):
         # Remove final classification layer
         self.backbone.fc = nn.Identity()
         
-        # Add custom classification head
+        # Add lightweight classification head  
+        in_features = 512 if config.backbone == "resnet18" else 2048
         self.classifier = nn.Sequential(
             nn.Dropout(0.5),
-            nn.Linear(2048, 512),
-            nn.ReLU(inplace=True),
+            nn.Linear(in_features, 128),  # Much smaller hidden layer
+            nn.ReLU(inplace=True), 
             nn.Dropout(0.3),
-            nn.Linear(512, self.num_classes)
+            nn.Linear(128, self.num_classes)
         )
         
         # Global average pooling for temporal dimension
@@ -113,12 +115,12 @@ class SlowOnlyModel(nn.Module):
         Input: (B, C, T, H, W) where T is temporal dimension
         Output: (B, num_classes)
         """
-        # Extract features
-        features = self.backbone(x)  # (B, 2048, T', H', W')
+        # Extract features  
+        features = self.backbone(x)  # (B, features, T', H', W')
         
         # Global average pooling
-        features = self.global_avg_pool(features)  # (B, 2048, 1, 1, 1)
-        features = features.view(features.size(0), -1)  # (B, 2048)
+        features = self.global_avg_pool(features)  # (B, features, 1, 1, 1)
+        features = features.view(features.size(0), -1)  # (B, features)
         
         # Classification
         logits = self.classifier(features)  # (B, num_classes)

@@ -19,11 +19,11 @@ class DataConfig:
     # Video specifications (from paper)
     frame_rate: int = 30
     original_resolution: Tuple[int, int] = (720, 480)
-    input_resolution: Tuple[int, int] = (256, 256)  # Resized for training
+    input_resolution: Tuple[int, int] = (64, 64)  # Ultra small for <1GB memory
     
     # Video processing
-    sample_rate: int = 4  # Sample every 4th frame
-    clip_duration: float = 2.0  # Most clips are 1-2 seconds
+    sample_rate: int = 8  # Sample every 8th frame for memory
+    clip_duration: float = 0.5  # Very short clips for memory
     
     # Data splits (from Table II in paper)
     train_split_ratios: List[float] = field(default_factory=lambda: [0.714, 0.786, 0.643])  # [2100/2940, 2310/2940, 1890/2940]
@@ -97,12 +97,12 @@ class DataConfig:
 @dataclass 
 class ModelConfig:
     """Model configuration based on paper specifications"""
-    # Architecture
-    backbone: str = "resnet50"  # From Table III
-    pretrained: str = "kinetics400"  # Best performing in paper
+    # Architecture - Ultra lightweight for <1GB memory  
+    backbone: str = "resnet18"  # Much smaller than resnet50
+    pretrained: str = "imagenet"  # Lighter than kinetics400
     
     # Training (from Section IV-A)
-    batch_size: int = 8  # Reduced for MX450/Xavier limitations
+    batch_size: int = 1  # Reduced for low memory GPU
     learning_rate: float = 0.001  # From paper
     optimizer: str = "sgd"  # From paper
     weight_decay: float = 1e-4
@@ -117,11 +117,11 @@ class ModelConfig:
     model_name: str = "slowonly"
     alpha: int = 4  # Temporal downsampling
     beta: int = 1   # Channel ratio
-    num_segments: int = 8  # Number of segments to sample
+    num_segments: int = 2  # Minimal segments for <1GB memory
     
-    # Hardware specific - CPU-first approach
-    device: str = "cpu"  # Default to CPU for compatibility
-    num_workers: int = 4
+    # Hardware specific - Force CPU due to low GPU memory
+    device: str = "cpu"  # Force CPU due to GPU memory constraints
+    num_workers: int = 1  # Minimal workers for memory  
     pin_memory: bool = False  # Disable for CPU compatibility
 
 
@@ -187,29 +187,10 @@ TRAINING_CONFIG = TrainingConfig()
 HARDWARE_CONFIG = HardwareConfig()
 
 
-def get_config_for_device(device_type: str = "auto") -> Dict[str, Any]:
+def get_config_for_device(device_type: str = "cpu_only") -> Dict[str, Any]:
     """Get configuration optimized for specific hardware"""
-    if device_type == "auto":
-        # Try to detect device safely (CPU-first approach)
-        try:
-            import torch
-            if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-                try:
-                    import subprocess
-                    gpu_info = subprocess.check_output("nvidia-smi --query-gpu=name --format=csv,noheader", 
-                                                     shell=True, text=True, stderr=subprocess.DEVNULL)
-                    if "Xavier" in gpu_info:
-                        device_type = "xavier"
-                    elif "MX450" in gpu_info:
-                        device_type = "mx450"
-                    else:
-                        device_type = "cpu_only"  # Default to CPU for compatibility
-                except:
-                    device_type = "cpu_only"
-            else:
-                device_type = "cpu_only"
-        except ImportError:
-            device_type = "cpu_only"
+    # Force CPU due to low GPU memory
+    device_type = "cpu_only"
     
     base_config = {
         "data": DATA_CONFIG,
