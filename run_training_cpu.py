@@ -66,8 +66,7 @@ def main():
         data_module = HRI30DataModule(
             data_config=config['data'],
             model_config=config['model'],
-            batch_size=config['model'].batch_size,
-            num_workers=config['model'].num_workers
+            split_id=1
         )
         
         # Create trainer
