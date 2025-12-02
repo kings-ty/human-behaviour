@@ -137,4 +137,17 @@ tb_logs/
 error.log
 debug.log
 training.log*.whl
-*.sh
+
+# Additional exclusions for optimized processing
+venv_cuda/
+pose_env/
+pose_features_optimized/batches/
+deinterlacing_verification/
+all_videos_interlacing_analysis.json
+problem_video_analysis.json
+optimized_batch_*.log
+
+# Keep final training data
+!pose_features_optimized/*.npy
+!pose_features_optimized/*.json
+!run_optimized_batch.sh
