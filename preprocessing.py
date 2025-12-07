@@ -126,8 +126,55 @@ def normalize_keypoints(keypoints: np.ndarray, confidence: np.ndarray,
     return normalized
 
 
+def deinterlace_frame(frame: np.ndarray, method: str = 'linear') -> np.ndarray:
+    """
+    Apply deinterlacing to remove interlacing artifacts.
+
+    Interlacing artifacts appear as horizontal lines/combing in videos.
+    This is critical for accurate pose detection.
+
+    Args:
+        frame: Input frame (H, W, 3) BGR format
+        method: 'bob' (fast, recommended) or 'linear' (slower, higher quality)
+
+    Returns:
+        Deinterlaced frame
+    """
+    if method == 'bob':
+        # Bob deinterlacing - duplicate odd lines
+        height, width = frame.shape[:2]
+        deinterlaced = np.zeros_like(frame)
+
+        # Keep odd lines, interpolate even lines
+        deinterlaced[1::2] = frame[1::2]  # Odd lines
+        deinterlaced[0::2] = frame[1::2]  # Interpolate even from odd
+
+        # Handle boundary
+        if height > 1:
+            deinterlaced[0] = frame[1]
+
+        return deinterlaced
+
+    elif method == 'linear':
+        # Linear interpolation - higher quality
+        height, width = frame.shape[:2]
+        deinterlaced = frame.copy()
+
+        # Interpolate even lines from neighboring odd lines
+        for i in range(0, height, 2):
+            if i + 1 < height and i - 1 >= 0:
+                deinterlaced[i] = (frame[i-1] + frame[i+1]) // 2
+            elif i + 1 < height:
+                deinterlaced[i] = frame[i+1]
+
+        return deinterlaced
+
+    else:
+        return frame  # No deinterlacing
+
+
 def extract_pose_from_frame(model: YOLO, frame: np.ndarray,
-                            device: str = 'cuda') -> Tuple[np.ndarray, np.ndarray, bool]:
+                            device: str = 'cuda', deinterlace_method: str = 'linear') -> Tuple[np.ndarray, np.ndarray, bool]:
     """
     Extract pose keypoints from a single frame using YOLOv8-Pose.
 
@@ -135,12 +182,17 @@ def extract_pose_from_frame(model: YOLO, frame: np.ndarray,
         model: YOLOv8-Pose model
         frame: Input frame (H, W, 3) BGR format
         device: Device to run inference on
+        deinterlace_method: Deinterlacing method ('bob', 'linear', or 'none')
 
     Returns:
         keypoints: (17, 2) array of [x, y] coordinates
         confidence: (17,) array of confidence scores
         detected: Boolean indicating if person was detected
     """
+    # Apply deinterlacing to remove artifacts
+    if deinterlace_method != 'none':
+        frame = deinterlace_frame(frame, deinterlace_method)
+
     # Run YOLOv8-Pose inference
     results = model(frame, device=device, verbose=False)
 
@@ -163,7 +215,7 @@ def extract_pose_from_frame(model: YOLO, frame: np.ndarray,
 
 
 def process_video(video_path: str, model: YOLO, device: str = 'cuda',
-                 max_frames: int = 60) -> Tuple[np.ndarray, bool]:
+                 max_frames: int = 60, deinterlace_method: str = 'linear') -> Tuple[np.ndarray, bool]:
     """
     Process a video and extract normalized pose sequences.
 
@@ -172,15 +224,34 @@ def process_video(video_path: str, model: YOLO, device: str = 'cuda',
         model: YOLOv8-Pose model
         device: Device to run inference on
         max_frames: Maximum sequence length (pad/truncate)
+        deinterlace_method: Deinterlacing method ('bob', 'linear', or 'none')
 
     Returns:
         sequence: (max_frames, 17, 2) array of normalized keypoints
         success: Boolean indicating if processing was successful
     """
+    video_name = os.path.basename(video_path)
+
+    # Redirect stderr to capture FFmpeg/OpenCV errors
+    import sys
+    from io import StringIO
+
+    old_stderr = sys.stderr
+    sys.stderr = StringIO()
+
     cap = cv2.VideoCapture(video_path)
 
+    # Capture any stderr output
+    stderr_output = sys.stderr.getvalue()
+    sys.stderr = old_stderr
+
+    # If there were errors in stderr, print them with video name
+    if stderr_output:
+        print(f"\n[{video_name}] Video codec warnings/errors:")
+        print(stderr_output.strip())
+
     if not cap.isOpened():
-        print(f"Error: Cannot open video {video_path}")
+        print(f"Error: Cannot open video {video_name}")
         return np.zeros((max_frames, 17, 2), dtype=np.float32), False
 
     frames_data = []
@@ -193,8 +264,8 @@ def process_video(video_path: str, model: YOLO, device: str = 'cuda',
         if not ret:
             break
 
-        # Extract pose from frame
-        keypoints, confidence, detected = extract_pose_from_frame(model, frame, device)
+        # Extract pose from frame (with deinterlacing)
+        keypoints, confidence, detected = extract_pose_from_frame(model, frame, device, deinterlace_method)
 
         # Handle occlusion/no detection
         if not detected:
@@ -359,6 +430,9 @@ def main():
     parser.add_argument('--batch_mode', type=str, default='train',
                        choices=['train', 'test', 'both'],
                        help='Process train, test, or both sets')
+    parser.add_argument('--deinterlace_method', type=str, default='linear',
+                       choices=['bob', 'linear', 'none'],
+                       help='Deinterlacing method: bob (fast, recommended), linear (slower, better quality), or none')
 
     args = parser.parse_args()
 
@@ -369,6 +443,7 @@ def main():
     print(f"Output directory: {args.output_dir}")
     print(f"Device: {args.device}")
     print(f"Max frames: {args.max_frames}")
+    print(f"Deinterlacing: {args.deinterlace_method}")
     print("="*80)
 
     # Check CUDA availability
@@ -428,17 +503,20 @@ def main():
         for video_path in tqdm(video_files, desc=f"Extracting poses"):
             video_name = video_path.name
 
-            # Extract pose sequence
-            sequence, success = process_video(str(video_path), model, args.device, args.max_frames)
+            # Print which video is being processed (helps identify problematic videos)
+            tqdm.write(f"Processing: {video_name}")
+
+            # Extract pose sequence (with deinterlacing)
+            sequence, success = process_video(str(video_path), model, args.device, args.max_frames, args.deinterlace_method)
 
             if not success:
-                print(f"Failed to process {video_name}")
+                tqdm.write(f"Failed to process {video_name}")
                 continue
 
             # Get label
             label = get_video_label(video_name, class_to_idx)
-            if label < 0:
-                continue
+            if label is None or label < 0:
+                label = -1
 
             sequences.append(sequence)
             labels.append(label)
