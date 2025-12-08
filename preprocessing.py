@@ -294,23 +294,55 @@ def process_video(video_path: str, model: YOLO, device: str = 'cuda',
     normalized_sequence = []
 
     for keypoints, confidence in frames_data:
-        # Get reference point for normalization
-        ref_point = get_reference_point(keypoints, confidence)
+        # Just collect raw keypoints for now (Sequence Level Processing is better)
+        normalized_sequence.append(keypoints)
 
-        if ref_point is not None:
-            # Normalize keypoints
-            normalized = normalize_keypoints(keypoints, confidence, ref_point)
-        else:
-            # No valid reference - use zero-centered (last resort)
-            normalized = np.zeros((17, 2), dtype=np.float32)
+    # Convert to numpy array (T, 17, 2)
+    sequence = np.array(normalized_sequence, dtype=np.float32)
 
-        normalized_sequence.append(normalized)
+    # =========================================================
+    # 🚀 MIT-LEVEL POST-PROCESSING (Sequence Based)
+    # =========================================================
+    
+    # 1. Smart Interpolation (Fill Missing)
+    T, V, C = sequence.shape
+    for v in range(V):
+        x, y = sequence[:, v, 0], sequence[:, v, 1]
+        valid = (x != 0) | (y != 0)
+        indices = np.arange(T)
+        if np.sum(valid) > 2:
+            sequence[:, v, 0] = np.interp(indices, indices[valid], x[valid])
+            sequence[:, v, 1] = np.interp(indices, indices[valid], y[valid])
 
-    # Convert to numpy array
-    normalized_sequence = np.array(normalized_sequence, dtype=np.float32)  # (T, 17, 2)
+    # 2. Dynamic Normalization (Body-Adaptive)
+    # Hip Center (11, 12)
+    hip_center = (sequence[:, 11] + sequence[:, 12]) / 2.0
+    # Shoulder Center (5, 6)
+    shoulder_center = (sequence[:, 5] + sequence[:, 6]) / 2.0
+    
+    # Torso Length (Robust Scale Factor)
+    torso_len = np.linalg.norm(shoulder_center - hip_center, axis=1)
+    mean_torso = np.mean(torso_len[torso_len > 1]) # Mean of valid frames
+    if np.isnan(mean_torso) or mean_torso < 1: mean_torso = 100.0 # Fallback
+    
+    scale_factor = mean_torso * 2.5 # Normalize so torso is ~0.4 units
+    
+    # Apply Center & Scale
+    sequence -= hip_center[:, None, :] # Center at Hip
+    sequence /= scale_factor # Scale
+    
+    # 3. Savitzky-Golay Smoothing (Jitter Removal)
+    from scipy.signal import savgol_filter
+    try:
+        if T > 7:
+            sequence = savgol_filter(sequence, window_length=7, polyorder=2, axis=0)
+    except:
+        pass # Skip if fails
+        
+    # =========================================================
 
     # Pad or truncate to fixed length
-    sequence = pad_or_truncate_sequence(normalized_sequence, max_frames)
+    sequence = pad_or_truncate_sequence(sequence, max_frames)
 
     return sequence, True
 
@@ -342,23 +374,22 @@ def pad_or_truncate_sequence(sequence: np.ndarray, max_frames: int) -> np.ndarra
 
 def load_class_labels(annotations_path: str) -> Dict[str, int]:
     """
-    Load class labels from annotations file.
-
-    Args:
-        annotations_path: Path to classInd.txt file
-
-    Returns:
-        Dictionary mapping class names to indices
+    Load class labels. If file missing, return empty dict and rely on CID parsing.
     """
     class_to_idx = {}
+    if not os.path.exists(annotations_path):
+        print(f"⚠️  Warning: {annotations_path} not found. Will rely on filename parsing (CIDxx).")
+        return {}
 
     with open(annotations_path, 'r') as f:
         for line in f:
             line = line.strip()
             if line:
-                idx, class_name = line.split()
-                class_to_idx[class_name] = int(idx)
-
+                try:
+                    idx, class_name = line.split()
+                    class_to_idx[class_name] = int(idx)
+                except:
+                    pass
     return class_to_idx
 
 
@@ -416,9 +447,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
-    parser.add_argument('--data_root', type=str, default='/home/ty/human-behaviour',
+    parser.add_argument('--data_root', type=str, default='/home/ty/human-bahviour',
                        help='Root directory containing train_set and test_set')
-    parser.add_argument('--output_dir', type=str, default='/home/ty/human-behaviour/pose_features',
+    parser.add_argument('--output_dir', type=str, default='/home/ty/human-bahviour/pose_features_large',
                        help='Output directory for processed .npy files')
     parser.add_argument('--model_path', type=str, default='yolov8n-pose.pt',
                        help='Path to YOLOv8-Pose model weights')
@@ -465,9 +496,13 @@ def main():
     model = YOLO(args.model_path)
 
     # Load class labels
-    annotations_path = os.path.join(args.data_root, 'annotations', 'classInd.txt')
-    class_to_idx = load_class_labels(annotations_path)
-    print(f"Loaded {len(class_to_idx)} classes")
+    # annotations_path = os.path.join(args.data_root, 'annotations', 'classInd.txt')
+    # class_to_idx = load_class_labels(annotations_path)
+    
+    # WE DON'T NEED EXTERNAL LABEL FILES.
+    # HRI30 encodes labels directly in filenames (e.g., CID23...).
+    class_to_idx = {} 
+    print("✅ Labels will be extracted directly from filenames (CIDxx). Robust & Simple.")
 
     # Process train and/or test sets
     sets_to_process = []
