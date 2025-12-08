@@ -75,13 +75,13 @@ class TestDataset(Dataset):
         # =========================================================
         
         # 1. Joint: raw joints (normalized)
-        joint_input = final_data.clone() / 3.0
+        joint_input = final_data.clone() # REMOVED / 3.0
 
         # 2. Bone: relative bone vectors scaled (/4.0)
         bone_input = torch.zeros_like(final_data)
         for v1, v2 in self.ntu_pairs:
             bone_input[:, :, v1, :] = final_data[:, :, v1, :] - final_data[:, :, v2, :]
-        bone_input = bone_input / 4.0
+        bone_input = bone_input # REMOVED / 4.0
 
         # 3. Motion: temporal differences scaled (*10.0)
         motion_input = torch.zeros_like(final_data)
@@ -113,7 +113,8 @@ def main():
     print(f"🎯 GENERATING FINAL SUBMISSION")
 
     # File paths
-    TEST_DATA_PATH = 'test_sequences.npy' 
+    # Assuming the script is run from the project root where test_sequences.npy resides
+    TEST_DATA_PATH = './test_sequences.npy' 
     JOINT_MODEL = 'best_topologyaware_joint_fold0.pth'
     BONE_MODEL = 'best_topologyaware_bone_fold0.pth'
     MOTION_MODEL = 'best_topologyaware_motion_fold0.pth'
@@ -135,17 +136,57 @@ def main():
 
     predictions = []
 
-    print("🚀 Predicting...")
+    print("🚀 Predicting with TTA (Test-Time Augmentation)...")
     with torch.no_grad():
         for j, b, m in tqdm(loader):
             j, b, m = j.to(device), b.to(device), m.to(device)
 
+            # 1. Standard Prediction
             out_j = F.softmax(model_j(j), dim=1)
             out_b = F.softmax(model_b(b), dim=1)
             out_m = F.softmax(model_m(m), dim=1)
+            
+            # 2. TTA: Horizontal Flip (Mirroring)
+            # Flip logic: x coordinate is index 0. Multiply by -1.
+            # Shape is (N, C, T, V). C=3 (x,y,z).
+            j_flip = j.clone(); j_flip[:, 0, :, :] *= -1
+            b_flip = b.clone(); b_flip[:, 0, :, :] *= -1
+            m_flip = m.clone(); m_flip[:, 0, :, :] *= -1
+
+            out_j_flip = F.softmax(model_j(j_flip), dim=1)
+            out_b_flip = F.softmax(model_b(b_flip), dim=1)
+            out_m_flip = F.softmax(model_m(m_flip), dim=1)
+
+            # 3. Conditional TTA Fusion (Smart TTA)
+            # 🛑 DIRECTIONAL CLASSES (Left/Right) - DO NOT FLIP!
+            # IDs inferred from dataset analysis:
+            # 3, 4, 7, 8, 13, 14 (Left variants)
+            # 5, 6, 9, 10, 15, 16 (Right variants)
+            # Note: Checking CSV, ID 4 is Left, ID 5 is Right, ID 15 is Right...
+            # We assume IDs 3,4,5,6,7,8,9,10,13,14,15,16 are directional.
+            
+            dir_ids = [3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16]
+            
+            # Create final logits holders
+            final_j = out_j.clone()
+            final_b = out_b.clone()
+            final_m = out_m.clone()
+
+            # Apply TTA averaging ONLY to non-directional (neutral) classes
+            # For directional classes, we keep the original score (out_j) untouched.
+            # We iterate to allow broadcasting if needed, or just mask.
+            
+            # Mask for neutral classes (all except dir_ids)
+            all_ids = torch.arange(30).to(device)
+            neutral_mask = torch.isin(all_ids, torch.tensor(dir_ids, device=device), invert=True)
+            
+            # Blend Flip predictions for Neutral classes only
+            final_j[:, neutral_mask] = (out_j[:, neutral_mask] + out_j_flip[:, neutral_mask]) / 2.0
+            final_b[:, neutral_mask] = (out_b[:, neutral_mask] + out_b_flip[:, neutral_mask]) / 2.0
+            final_m[:, neutral_mask] = (out_m[:, neutral_mask] + out_m_flip[:, neutral_mask]) / 2.0
 
             # 🏆 Golden ratio used: Joint 0.2 : Bone 0.4 : Motion 0.4
-            final_score = (0.2 * out_j) + (0.4 * out_b) + (0.4 * out_m)
+            final_score = (0.2 * final_j) + (0.4 * final_b) + (0.4 * final_m)
             
             pred_batch = torch.argmax(final_score, dim=1).cpu().numpy()
             predictions.extend(pred_batch)
