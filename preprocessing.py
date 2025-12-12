@@ -126,8 +126,55 @@ def normalize_keypoints(keypoints: np.ndarray, confidence: np.ndarray,
     return normalized
 
 
+def deinterlace_frame(frame: np.ndarray, method: str = 'linear') -> np.ndarray:
+    """
+    Apply deinterlacing to remove interlacing artifacts.
+
+    Interlacing artifacts appear as horizontal lines/combing in videos.
+    This is critical for accurate pose detection.
+
+    Args:
+        frame: Input frame (H, W, 3) BGR format
+        method: 'bob' (fast, recommended) or 'linear' (slower, higher quality)
+
+    Returns:
+        Deinterlaced frame
+    """
+    if method == 'bob':
+        # Bob deinterlacing - duplicate odd lines
+        height, width = frame.shape[:2]
+        deinterlaced = np.zeros_like(frame)
+
+        # Keep odd lines, interpolate even lines
+        deinterlaced[1::2] = frame[1::2]  # Odd lines
+        deinterlaced[0::2] = frame[1::2]  # Interpolate even from odd
+
+        # Handle boundary
+        if height > 1:
+            deinterlaced[0] = frame[1]
+
+        return deinterlaced
+
+    elif method == 'linear':
+        # Linear interpolation - higher quality
+        height, width = frame.shape[:2]
+        deinterlaced = frame.copy()
+
+        # Interpolate even lines from neighboring odd lines
+        for i in range(0, height, 2):
+            if i + 1 < height and i - 1 >= 0:
+                deinterlaced[i] = (frame[i-1] + frame[i+1]) // 2
+            elif i + 1 < height:
+                deinterlaced[i] = frame[i+1]
+
+        return deinterlaced
+
+    else:
+        return frame  # No deinterlacing
+
+
 def extract_pose_from_frame(model: YOLO, frame: np.ndarray,
-                            device: str = 'cuda') -> Tuple[np.ndarray, np.ndarray, bool]:
+                            device: str = 'cuda', deinterlace_method: str = 'linear') -> Tuple[np.ndarray, np.ndarray, bool]:
     """
     Extract pose keypoints from a single frame using YOLOv8-Pose.
 
@@ -135,12 +182,17 @@ def extract_pose_from_frame(model: YOLO, frame: np.ndarray,
         model: YOLOv8-Pose model
         frame: Input frame (H, W, 3) BGR format
         device: Device to run inference on
+        deinterlace_method: Deinterlacing method ('bob', 'linear', or 'none')
 
     Returns:
         keypoints: (17, 2) array of [x, y] coordinates
         confidence: (17,) array of confidence scores
         detected: Boolean indicating if person was detected
     """
+    # Apply deinterlacing to remove artifacts
+    if deinterlace_method != 'none':
+        frame = deinterlace_frame(frame, deinterlace_method)
+
     # Run YOLOv8-Pose inference
     results = model(frame, device=device, verbose=False)
 
@@ -163,7 +215,7 @@ def extract_pose_from_frame(model: YOLO, frame: np.ndarray,
 
 
 def process_video(video_path: str, model: YOLO, device: str = 'cuda',
-                 max_frames: int = 60) -> Tuple[np.ndarray, bool]:
+                 max_frames: int = 60, deinterlace_method: str = 'linear') -> Tuple[np.ndarray, bool]:
     """
     Process a video and extract normalized pose sequences.
 
@@ -172,15 +224,34 @@ def process_video(video_path: str, model: YOLO, device: str = 'cuda',
         model: YOLOv8-Pose model
         device: Device to run inference on
         max_frames: Maximum sequence length (pad/truncate)
+        deinterlace_method: Deinterlacing method ('bob', 'linear', or 'none')
 
     Returns:
         sequence: (max_frames, 17, 2) array of normalized keypoints
         success: Boolean indicating if processing was successful
     """
+    video_name = os.path.basename(video_path)
+
+    # Redirect stderr to capture FFmpeg/OpenCV errors
+    import sys
+    from io import StringIO
+
+    old_stderr = sys.stderr
+    sys.stderr = StringIO()
+
     cap = cv2.VideoCapture(video_path)
 
+    # Capture any stderr output
+    stderr_output = sys.stderr.getvalue()
+    sys.stderr = old_stderr
+
+    # If there were errors in stderr, print them with video name
+    if stderr_output:
+        print(f"\n[{video_name}] Video codec warnings/errors:")
+        print(stderr_output.strip())
+
     if not cap.isOpened():
-        print(f"Error: Cannot open video {video_path}")
+        print(f"Error: Cannot open video {video_name}")
         return np.zeros((max_frames, 17, 2), dtype=np.float32), False
 
     frames_data = []
@@ -193,8 +264,8 @@ def process_video(video_path: str, model: YOLO, device: str = 'cuda',
         if not ret:
             break
 
-        # Extract pose from frame
-        keypoints, confidence, detected = extract_pose_from_frame(model, frame, device)
+        # Extract pose from frame (with deinterlacing)
+        keypoints, confidence, detected = extract_pose_from_frame(model, frame, device, deinterlace_method)
 
         # Handle occlusion/no detection
         if not detected:
@@ -223,23 +294,55 @@ def process_video(video_path: str, model: YOLO, device: str = 'cuda',
     normalized_sequence = []
 
     for keypoints, confidence in frames_data:
-        # Get reference point for normalization
-        ref_point = get_reference_point(keypoints, confidence)
+        # Just collect raw keypoints for now (Sequence Level Processing is better)
+        normalized_sequence.append(keypoints)
 
-        if ref_point is not None:
-            # Normalize keypoints
-            normalized = normalize_keypoints(keypoints, confidence, ref_point)
-        else:
-            # No valid reference - use zero-centered (last resort)
-            normalized = np.zeros((17, 2), dtype=np.float32)
+    # Convert to numpy array (T, 17, 2)
+    sequence = np.array(normalized_sequence, dtype=np.float32)
 
-        normalized_sequence.append(normalized)
+    # =========================================================
+    # 🚀 MIT-LEVEL POST-PROCESSING (Sequence Based)
+    # =========================================================
+    
+    # 1. Smart Interpolation (Fill Missing)
+    T, V, C = sequence.shape
+    for v in range(V):
+        x, y = sequence[:, v, 0], sequence[:, v, 1]
+        valid = (x != 0) | (y != 0)
+        indices = np.arange(T)
+        if np.sum(valid) > 2:
+            sequence[:, v, 0] = np.interp(indices, indices[valid], x[valid])
+            sequence[:, v, 1] = np.interp(indices, indices[valid], y[valid])
 
-    # Convert to numpy array
-    normalized_sequence = np.array(normalized_sequence, dtype=np.float32)  # (T, 17, 2)
+    # 2. Dynamic Normalization (Body-Adaptive)
+    # Hip Center (11, 12)
+    hip_center = (sequence[:, 11] + sequence[:, 12]) / 2.0
+    # Shoulder Center (5, 6)
+    shoulder_center = (sequence[:, 5] + sequence[:, 6]) / 2.0
+    
+    # Torso Length (Robust Scale Factor)
+    torso_len = np.linalg.norm(shoulder_center - hip_center, axis=1)
+    mean_torso = np.mean(torso_len[torso_len > 1]) # Mean of valid frames
+    if np.isnan(mean_torso) or mean_torso < 1: mean_torso = 100.0 # Fallback
+    
+    scale_factor = mean_torso * 2.5 # Normalize so torso is ~0.4 units
+    
+    # Apply Center & Scale
+    sequence -= hip_center[:, None, :] # Center at Hip
+    sequence /= scale_factor # Scale
+    
+    # 3. Savitzky-Golay Smoothing (Jitter Removal)
+    from scipy.signal import savgol_filter
+    try:
+        if T > 7:
+            sequence = savgol_filter(sequence, window_length=7, polyorder=2, axis=0)
+    except:
+        pass # Skip if fails
+        
+    # =========================================================
 
     # Pad or truncate to fixed length
-    sequence = pad_or_truncate_sequence(normalized_sequence, max_frames)
+    sequence = pad_or_truncate_sequence(sequence, max_frames)
 
     return sequence, True
 
@@ -271,23 +374,22 @@ def pad_or_truncate_sequence(sequence: np.ndarray, max_frames: int) -> np.ndarra
 
 def load_class_labels(annotations_path: str) -> Dict[str, int]:
     """
-    Load class labels from annotations file.
-
-    Args:
-        annotations_path: Path to classInd.txt file
-
-    Returns:
-        Dictionary mapping class names to indices
+    Load class labels. If file missing, return empty dict and rely on CID parsing.
     """
     class_to_idx = {}
+    if not os.path.exists(annotations_path):
+        print(f"⚠️  Warning: {annotations_path} not found. Will rely on filename parsing (CIDxx).")
+        return {}
 
     with open(annotations_path, 'r') as f:
         for line in f:
             line = line.strip()
             if line:
-                idx, class_name = line.split()
-                class_to_idx[class_name] = int(idx)
-
+                try:
+                    idx, class_name = line.split()
+                    class_to_idx[class_name] = int(idx)
+                except:
+                    pass
     return class_to_idx
 
 
@@ -345,9 +447,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
-    parser.add_argument('--data_root', type=str, default='/home/ty/human-behaviour',
+    parser.add_argument('--data_root', type=str, default='/home/ty/human-bahviour',
                        help='Root directory containing train_set and test_set')
-    parser.add_argument('--output_dir', type=str, default='/home/ty/human-behaviour/pose_features',
+    parser.add_argument('--output_dir', type=str, default='/home/ty/human-bahviour/pose_features_large',
                        help='Output directory for processed .npy files')
     parser.add_argument('--model_path', type=str, default='yolov8n-pose.pt',
                        help='Path to YOLOv8-Pose model weights')
@@ -359,6 +461,9 @@ def main():
     parser.add_argument('--batch_mode', type=str, default='train',
                        choices=['train', 'test', 'both'],
                        help='Process train, test, or both sets')
+    parser.add_argument('--deinterlace_method', type=str, default='linear',
+                       choices=['bob', 'linear', 'none'],
+                       help='Deinterlacing method: bob (fast, recommended), linear (slower, better quality), or none')
 
     args = parser.parse_args()
 
@@ -369,6 +474,7 @@ def main():
     print(f"Output directory: {args.output_dir}")
     print(f"Device: {args.device}")
     print(f"Max frames: {args.max_frames}")
+    print(f"Deinterlacing: {args.deinterlace_method}")
     print("="*80)
 
     # Check CUDA availability
@@ -390,9 +496,13 @@ def main():
     model = YOLO(args.model_path)
 
     # Load class labels
-    annotations_path = os.path.join(args.data_root, 'annotations', 'classInd.txt')
-    class_to_idx = load_class_labels(annotations_path)
-    print(f"Loaded {len(class_to_idx)} classes")
+    # annotations_path = os.path.join(args.data_root, 'annotations', 'classInd.txt')
+    # class_to_idx = load_class_labels(annotations_path)
+    
+    # WE DON'T NEED EXTERNAL LABEL FILES.
+    # HRI30 encodes labels directly in filenames (e.g., CID23...).
+    class_to_idx = {} 
+    print("✅ Labels will be extracted directly from filenames (CIDxx). Robust & Simple.")
 
     # Process train and/or test sets
     sets_to_process = []
@@ -428,17 +538,20 @@ def main():
         for video_path in tqdm(video_files, desc=f"Extracting poses"):
             video_name = video_path.name
 
-            # Extract pose sequence
-            sequence, success = process_video(str(video_path), model, args.device, args.max_frames)
+            # Print which video is being processed (helps identify problematic videos)
+            tqdm.write(f"Processing: {video_name}")
+
+            # Extract pose sequence (with deinterlacing)
+            sequence, success = process_video(str(video_path), model, args.device, args.max_frames, args.deinterlace_method)
 
             if not success:
-                print(f"Failed to process {video_name}")
+                tqdm.write(f"Failed to process {video_name}")
                 continue
 
             # Get label
             label = get_video_label(video_name, class_to_idx)
-            if label < 0:
-                continue
+            if label is None or label < 0:
+                label = -1
 
             sequences.append(sequence)
             labels.append(label)
