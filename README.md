@@ -1,2 +1,5 @@
-[SensingAndPerception.pdf](https://github.com/user-attachments/files/24791843/SensingAndPerception.pdf)
-[Uploading SAP_CW2_Poster.pdf…]()
+![SAP_CW2_Poster_page-0001](https://github.com/user-attachments/assets/fb83093f-d112-42dd-b51c-7364e9fc048e)
+![SensingAndPerception_page-0004](https://github.com/user-attachments/assets/811d5025-5875-4222-9b68-12197efc958a)
+![SensingAndPerception_page-0003](https://github.com/user-attachments/assets/37256bcb-bc1c-437c-bc98-6936ff1683d9)
+![SensingAndPerception_page-0002](https://github.com/user-attachments/assets/6bbbc6b0-ed63-4605-822c-38434c002870)
+![SensingAndPerception_page-0001](https://github.com/user-attachments/assets/bdf2ef62-983d-483d-947d-7debbfa8886c)
